@@ -1,4 +1,5 @@
 # Project description
+![alt text](/imgs/example.png "Generated image and real image")
 
 In this project we aim to work on image generation from textual descriptions. In particular, we want to generate a photo of the product (clothes) from online shop based on its textual description. The problem of creating an image for products in online shops arises from having only textual description of the product available, while it is desirable to have an image representation of the product to draw attention of buyers. Also, this project can have a great impact to the area of fashion, because generated images can be an inspiration for designers and manufacturers. 
 
@@ -7,6 +8,15 @@ Inspired by recent developments of diffusion models on text-to-image generation 
 # Project technology
 The project is served on Docker.
 
-# Current checkpoint:
-- Readme file
-- Docker prototype
+# Project components:
+- data/: Folder for descriptions files about each product;
+- code/: Contains .py files;
+- notebooks: Contains .ipynb files.
+
+# Running training:
+1. Fill in arguments for training in code/config.py
+2. Open and run dreambooth.ipynb
+
+# Evaluation on Docker:
+1. Run docker file
+2. Write prompt
