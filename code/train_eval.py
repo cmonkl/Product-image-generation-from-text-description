@@ -1,4 +1,3 @@
-
 from diffusers import (
     UNet2DConditionModel, 
     LMSDiscreteScheduler, 
@@ -10,15 +9,18 @@ from diffusers import (
 from transformers import CLIPTextModel, CLIPTokenizer
 import torch
 import bitsandbytes as bnb
+from torchvision import transforms
+from torchmetrics.image.fid import FrechetInceptionDistance
+from torchmetrics.image.inception import InceptionScore
 
 def eval_step(unet, text_encoder, tokenizer, vae, accelerator, dataloader, logger, epoch, args, weight_dtype):
     indices = dataloader.dataset.indices
     n = 10
-    labels = [dataloader.dataset.dataset.descriptions.iloc[indices[i]]['description'] for i in range(n)]
+    labels_to_log = [dataloader.dataset.dataset.descriptions.iloc[indices[i]]['description'] for i in range(n)]
     true_images = [dataloader.dataset[i][1].float().permute(1, 2, 0) for i in range(n)]
     true_images = [(image / 2 + 0.5).clamp(0, 1).numpy() for image in true_images]
     image_array = [(true_images[i] * 255).astype(np.uint8) for i in range(len(true_images))]
-    true_images = [Image.fromarray(image) for image in image_array]
+    true_images_to_log = [Image.fromarray(image) for image in image_array]
 
     pipeline = DiffusionPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
@@ -32,24 +34,53 @@ def eval_step(unet, text_encoder, tokenizer, vae, accelerator, dataloader, logge
     pipeline.safety_checker = lambda images, clip_input: (images, False)
     pipeline.scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
     pipeline = pipeline.to(accelerator.device)
-    #pipeline.set_progress_bar_config()
 
     # run inference
     generator = None if args.seed is None else torch.Generator(device=accelerator.device).manual_seed(args.seed)
-    images = []
-    for i in tqdm(range(n)):
-        with torch.autocast("cuda"):
-            image = pipeline(labels[i], num_inference_steps=args.num_inference_steps, 
-                             generator=generator, width=args.width, 
-                             height=args.height).images[0]
-            images.append(image)
+   
+    metric_fid = 0.0
+    metric_inception = 0.0
+    to_tens = transforms.ToTensor()
+    num_iters = 10
+    
+    for idx, batch_data in enumerate(dataloader):
+        if idx < num_iters:
+            text, images = batch_data
+            lbl_idx = idx * len(text)
+            indices = dataloader.dataset.indices
+            labels = [dataloader.dataset.dataset.descriptions.iloc[indices[lbl_idx + i]]['description'] for i in range(images.shape[0])]
 
-    logger.log({"true_images": [wandb.Image(image, caption=labels[i]) for i, image in enumerate(true_images)],
-                "pred_images": [wandb.Image(image, caption=labels[i]) for i, image in enumerate(images)]},
+            with torch.autocast("cuda"):
+                pred_images = pipeline(labels, 
+                                 num_inference_steps=args.num_inference_steps, 
+                                 generator=generator, width=args.width, 
+                                 height=args.height).images
+
+            if idx == 0:
+                imgs_to_log = pred_images[:n]
+
+            fid = FrechetInceptionDistance(feature=2048, normalize=True)
+            inception_score = InceptionScore(feature=2048, normalize=True)    
+
+            pred_images = torch.cat([to_tens(im).unsqueeze(0) for im in pred_images], 0)
+            true_images = (images / 2 + 0.5).clamp(0, 1) #torch.cat([to_tens(im) for im in true_images], 0)
+            fid.update(true_images.cpu(), real=True)
+            fid.update(pred_images.cpu(), real=False)
+            
+            inception_score.update(pred_images.cpu())
+            metric_fid += fid.compute().item() #(pred_images, true_images)
+            metric_inception += inception_score.compute()[0].item()
+
+    logger.log({"pred_images": [wandb.Image(image, caption=labels_to_log[i]) for i, image in enumerate(imgs_to_log)],
+                "true_images": [wandb.Image(image, caption=labels_to_log[i]) for i, image in enumerate(true_images_to_log)]},
                       step=epoch)
+    metric_fid /= num_iters
+    metric_inception /= num_iters
     
     del pipeline
     torch.cuda.empty_cache()
+    
+    return metric_fid, metric_inception
 
 def train(args, train_dataloader, val_dataloader):
     vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", 
@@ -261,5 +292,9 @@ def train(args, train_dataloader, val_dataloader):
         args.logger.log({"lr":lr_scheduler.get_last_lr()[0]}, step=epoch)
         print(f"Epoch: {epoch}, loss: {epoch_loss / num_update_steps_per_epoch}")
 
-    # Create the pipeline using using the trained modules and save it.
     accelerator.wait_for_everyone()
+    
+    save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+    accelerator.save_state(save_path)
+    print(f"Saved state to {save_path}")
+    return unet, text_encoder
