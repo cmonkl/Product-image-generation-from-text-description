@@ -1,1 +1,1 @@
-Downloading the model will be available through the link, presented in the Project Description.
+Downloading the model is available through the link [Fine-Tuned model](https://drive.google.com/file/d/1h2AfpmAACvM3ShbuXHDP0MFKgI3hqQzF/view?usp=sharing)
