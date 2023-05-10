@@ -1,0 +1,1 @@
+Downloading the model will be available through the link, presented in the Project Description.
