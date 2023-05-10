@@ -1,0 +1,9 @@
+uvicorn
+fastapi
+diffusers
+matplotlib
+loguru
+accelerate
+Pillow
+pybase64
+optimum[openvino]
